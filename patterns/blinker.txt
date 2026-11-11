@@ -1,0 +1,6 @@
+! Blinker: period-2 oscillator
+.....
+..*..
+..*..
+..*..
+.....
