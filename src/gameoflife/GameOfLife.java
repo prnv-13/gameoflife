@@ -63,14 +63,21 @@ public final class GameOfLife {
 
     private static void runConsole(Grid grid) {
         BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
+        EndDetector detector = new EndDetector();
+        EndDetector.Result end = detector.reset(grid);
         try {
             while (true) {
                 System.out.printf("Generation %d  (live cells: %d)%n", grid.generation(), grid.liveCount());
                 System.out.print(grid);
+                if (end != null) {
+                    System.out.println("Game over: " + end.describe());
+                    break;
+                }
                 System.out.print("[Enter] next generation, [q] quit: ");
                 String line = in.readLine();
                 if (line == null || line.trim().equalsIgnoreCase("q")) break;
                 GameOfLifeHelper.step(grid);
+                end = detector.check(grid);
                 System.out.println();
             }
         } catch (IOException e) {
@@ -200,13 +207,22 @@ public final class GameOfLife {
     // ---------------------------------------------------------------- window
 
     static final class Window extends JFrame {
+        static final int DEFAULT_SPEED = 5;   // generations per second
+        static final int MAX_SPEED = 30;
+
         private final Grid grid;
         private boolean[][] initial;
         private final double density;
         private final Random rng;
         private final Board board;
+        private final EndDetector detector = new EndDetector();
         private final JLabel status = new JLabel();
+        private final JLabel endMessage = new JLabel(" ");
         private final JToggleButton edit = new JToggleButton("Edit cells");
+        private final JToggleButton play = new JToggleButton("Play");
+        private final JSlider speed = new JSlider(1, MAX_SPEED, DEFAULT_SPEED);
+        private final JLabel speedValue = new JLabel();
+        private final Timer timer;
 
         Window(Grid grid, double density, Random rng) {
             super("Game of Life");
@@ -215,29 +231,63 @@ public final class GameOfLife {
             this.rng = rng;
             this.initial = snapshot(grid);
             this.board = new Board();
+            this.timer = new Timer(delayMs(), e -> advance());
 
             JButton next = new JButton("Next generation");
             next.addActionListener(e -> advance());
+            play.setToolTipText("Run generations automatically");
+            play.addActionListener(e -> {
+                if (play.isSelected()) start(); else pause();
+            });
             JButton reset = new JButton("Reset");
             reset.setToolTipText("Back to the starting position");
-            reset.addActionListener(e -> { restore(); refresh(); });
+            reset.addActionListener(e -> { restore(); newStart(); });
             JButton random = new JButton("Random");
-            random.addActionListener(e -> { grid.randomize(density, rng); initial = snapshot(grid); refresh(); });
+            random.addActionListener(e -> { grid.randomize(density, rng); initial = snapshot(grid); newStart(); });
             JButton clear = new JButton("Clear");
-            clear.addActionListener(e -> { grid.clear(); initial = snapshot(grid); edit.setSelected(true); refresh(); });
+            clear.addActionListener(e -> {
+                pause();
+                grid.clear();
+                initial = snapshot(grid);
+                edit.setSelected(true);
+                newStart();
+            });
             edit.setToolTipText("When on, clicking a cell toggles it instead of advancing the game");
-            edit.addActionListener(e -> refresh());
+            edit.addActionListener(e -> {
+                if (edit.isSelected()) pause();
+                refresh();
+            });
 
-            JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT));
-            controls.add(next);
-            controls.add(reset);
-            controls.add(random);
-            controls.add(clear);
-            controls.add(edit);
+            speed.addChangeListener(e -> {
+                timer.setDelay(delayMs());
+                timer.setInitialDelay(delayMs());
+                updateSpeedLabel();
+            });
+            updateSpeedLabel();
 
-            JPanel south = new JPanel(new BorderLayout());
+            JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT));
+            buttons.add(next);
+            buttons.add(play);
+            buttons.add(reset);
+            buttons.add(random);
+            buttons.add(clear);
+            buttons.add(edit);
+
+            JPanel speedRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
+            speedRow.add(new JLabel("Speed"));
+            speedRow.add(speed);
+            speedRow.add(speedValue);
+
+            JPanel controls = new JPanel(new GridLayout(2, 1));
+            controls.add(buttons);
+            controls.add(speedRow);
+
+            endMessage.setForeground(new Color(0xA33A1E));
+            endMessage.setFont(endMessage.getFont().deriveFont(Font.BOLD));
+            JPanel south = new JPanel(new GridLayout(2, 1, 0, 2));
             south.setBorder(BorderFactory.createEmptyBorder(4, 8, 6, 8));
-            south.add(status, BorderLayout.WEST);
+            south.add(status);
+            south.add(endMessage);
 
             add(controls, BorderLayout.NORTH);
             add(board, BorderLayout.CENTER);
@@ -246,20 +296,57 @@ public final class GameOfLife {
             setDefaultCloseOperation(EXIT_ON_CLOSE);
             pack();
             setLocationRelativeTo(null);
+            newStart();
+        }
+
+        private int delayMs() {
+            return 1000 / speed.getValue();
+        }
+
+        private void updateSpeedLabel() {
+            speedValue.setText(speed.getValue() + " gen/s");
+        }
+
+        private void start() {
+            if (edit.isSelected()) edit.setSelected(false);
+            if (detector.result() != null) {
+                // Already over: nothing new will happen, so don't start the timer.
+                play.setSelected(false);
+                refresh();
+                return;
+            }
+            play.setSelected(true);
+            play.setText("Pause");
+            timer.start();
+            refresh();
+        }
+
+        private void pause() {
+            timer.stop();
+            play.setSelected(false);
+            play.setText("Play");
+        }
+
+        /** The board was replaced (reset, random, clear, edit): start end detection afresh. */
+        private void newStart() {
+            detector.reset(grid);
             refresh();
         }
 
         private void advance() {
             GameOfLifeHelper.step(grid);
+            if (detector.check(grid) != null) pause();
             refresh();
         }
 
         private void refresh() {
             String hint = edit.isSelected()
                     ? "Editing: click cells to toggle"
-                    : "Click board = next generation";
+                    : timer.isRunning() ? "Playing" : "Click board = next generation";
             status.setText(String.format("Gen %d  |  Live %d  |  %dx%d  |  %s",
                     grid.generation(), grid.liveCount(), grid.rows(), grid.cols(), hint));
+            EndDetector.Result end = detector.result();
+            endMessage.setText(end == null ? " " : "Game over: " + end.describe());
             board.repaint();
         }
 
@@ -293,7 +380,7 @@ public final class GameOfLife {
                             if (rc != null) {
                                 grid.toggle(rc[0], rc[1]);
                                 initial = snapshot(grid);
-                                refresh();
+                                newStart();
                             }
                         } else {
                             advance();

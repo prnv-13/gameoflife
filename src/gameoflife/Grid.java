@@ -1,5 +1,6 @@
 package gameoflife;
 
+import java.util.BitSet;
 import java.util.Random;
 
 /**
@@ -60,6 +61,15 @@ public final class Grid {
 
     public boolean isAlive(int r, int c) {
         return cells[r][c];
+    }
+
+    /** The board's live cells as a compact, hashable value (row-major bit per cell). */
+    public BitSet stateKey() {
+        BitSet bits = new BitSet(rows * cols);
+        for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++)
+                if (cells[r][c]) bits.set(r * cols + c);
+        return bits;
     }
 
     public int liveCount() {
